@@ -1,0 +1,460 @@
+<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>DIFFUSE CONTROL — IRIS STUDY 01 · 빛으로 드러나는 그래픽 생성기</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19/dist/lil-gui.umd.min.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;font:12px system-ui,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;background:#f3f1f6;color:#2b2833;display:flex;height:100vh;overflow:hidden}
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#bar{display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid #e2dfea;background:#faf9fc;flex-wrap:wrap}
+#gen{font:700 16px inherit;padding:14px 28px;background:linear-gradient(90deg,#f3a6c8,#a9b8f5);color:#fff;border:0;border-radius:30px;cursor:pointer;box-shadow:0 2px 14px #b9a6f566}#gen:hover{filter:brightness(1.06)}
+.sm{padding:8px 12px;border:1px solid #cfc9e0;background:#fff;border-radius:18px;cursor:pointer;font:inherit;color:#443f55}.sm:hover{background:#efeaff}
+#seed{width:96px;padding:7px;border:1px solid #cfc9e0;border-radius:8px;font:inherit}
+#stage{flex:1;display:flex;align-items:center;justify-content:center;padding:16px;min-height:0}
+#cv{max-width:100%;max-height:100%;box-shadow:0 6px 40px #8a7ccf26;cursor:crosshair;border-radius:4px}
+#cv.tr{background:repeating-conic-gradient(#ddd 0 25%,#fff 0 50%) 0 0/20px 20px}
+#msg{padding:4px 14px;color:#c0457a;height:22px}#gui{width:330px;overflow:auto;background:#1e1c26}
+</style></head><body>
+<div id="main"><div id="bar">
+<button id="gen">새 구성 생성</button>
+<button class="sm" id="b-pal">팔레트만 변경</button><button class="sm" id="b-comp">구도만 변경</button><button class="sm" id="b-light">빛만 변경</button><button class="sm" id="b-src">원본 반영만 변경</button><button class="sm" id="b-pat">패턴만 변경</button>
+<span id="preset" style="margin-left:12px;letter-spacing:.08em;font-size:11px;color:#8a7ccf">DIFFUSE CONTROL — IRIS STUDY 01</span><label style="margin-left:auto">현재 시드 <input id="seed" title="새 시드 입력 후 Enter" placeholder="새 시드 입력"></label>
+<button class="sm" id="b-reset">초기화</button><button class="sm" id="pz">일시정지</button><button class="sm" id="up">이미지 불러오기</button><input type="file" id="file" accept="image/*" hidden></div>
+<div id="stage"><canvas id="cv"></canvas></div><div id="msg"></div></div><div id="gui"></div>
+<script>
+/* ===== 유틸: 시드 난수, 노이즈, OKLCH 색 ===== */
+const $=s=>document.querySelector(s),TAU=Math.PI*2,clamp=(v,a=0,b=1)=>Math.max(a,Math.min(b,v)),lerp=(a,b,t)=>a+(b-a)*t;
+const sstep=(a,b,x)=>{const t=clamp((x-a)/(b-a||1e-6));return t*t*(3-2*t)};
+const RNG=s=>{s>>>=0;return()=>{s=s+0x6D2B79F5>>>0;let t=s;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}};
+const hash=(x,y,s)=>{let h=Math.imul(x|0,374761393)+Math.imul(y|0,668265263)+Math.imul(s|0,1274126177);h=Math.imul(h^h>>>13,1274126177);return((h^h>>>16)>>>0)/4294967296};
+const noise=(x,y,s)=>{const xi=Math.floor(x),yi=Math.floor(y),fx=x-xi,fy=y-yi,u=fx*fx*(3-2*fx),v=fy*fy*(3-2*fy);return lerp(lerp(hash(xi,yi,s),hash(xi+1,yi,s),u),lerp(hash(xi,yi+1,s),hash(xi+1,yi+1,s),u),v)};
+const gauss=r=>(r()+r()+r()-1.5)/.75,hl=(a,b,t)=>a+(((b-a+540)%360)-180)*t;   // 색상환 보간
+function ok(L,C,H){H*=Math.PI/180;let r,g,b;for(let i=0;i<9;i++){const A=C*Math.cos(H),B=C*Math.sin(H),l=(L+.3963377774*A+.2158037573*B)**3,m=(L-.1055613458*A-.0638541728*B)**3,s=(L-.0894841775*A-1.291485548*B)**3;r=4.0767416621*l-3.3077115913*m+.2309699292*s;g=-1.2684380046*l+2.6097574011*m-.3413193965*s;b=-.0041960863*l-.7034186147*m+1.707614701*s;if(Math.min(r,g,b)>=-.002&&Math.max(r,g,b)<=1.002)break;C*=.85}
+ const f=x=>Math.round(255*clamp(x<=.0031308?12.92*x:1.055*Math.pow(Math.max(x,0),1/2.4)-.055));return[f(r),f(g),f(b)]}
+const lab=(r,g,b)=>{const f=x=>x<=.04045?x/12.92:Math.pow((x+.055)/1.055,2.4),R=f(r),G=f(g),B=f(b),l=Math.cbrt(.4122214708*R+.5363325363*G+.0514459929*B),m=Math.cbrt(.2119034982*R+.6806995451*G+.1073969566*B),s=Math.cbrt(.0883024619*R+.2817188376*G+.6299787005*B);
+ return[.2104542553*l+.793617785*m-.0040720468*s,1.9779984951*l-2.428592205*m+.4505937099*s,.0259040371*l+.7827717662*m-.808675766*s]};
+const rgba=(c,a)=>`rgba(${c[0]},${c[1]},${c[2]},${a})`,mixc=(a,b,t)=>[a[0]+(b[0]-a[0])*t|0,a[1]+(b[1]-a[1])*t|0,a[2]+(b[2]-a[2])*t|0],cvs=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c};
+
+/* ===== 파라미터 표 [폴더,키,기본값,범위,한글 라벨] (범위: 0=토글, 1=0~1, [min,max,step], ['선택지']) ===== */
+const REC=['균형형 재구성','형태 중심','패턴 중심','색 위치 중심','추상화 강함','혼합형'],PT=['부드러운 반점','투명한 색 덩어리','미세한 점 무리','흐린 패치','셀 구조 느낌','혼합형'],
+CM=['대각 흐름','곡선 흐름','비대칭 회전','중심 이탈 군집','완만한 소용돌이','퍼지는 구조','유동형 레이어'],
+PM=['유사색 + 보색 포인트','유사색 + 분할보색 포인트','따뜻한 색 + 시원한 포인트','시원한 색 + 따뜻한 포인트','삼색 조화','단색 + 포인트'],
+LM=['마우스','떠다님','원형 궤도','가로 스윕','세로 스윕','노이즈 이동'],
+AM=['단일 상태','움직임 겹침','순서 배열'],AD=['열림','닫힘'],AB=['일반','스크린','밝게'],AT=['빛','조리개'];
+const S=[
+['원본','invert',false,0,'원본 반전'],['원본','threshold',.14,[0,.6,.01],'배경 분리 민감도'],['원본','imageScale',.9,[.2,2,.01],'원본 크기'],['원본','imageRotation',0,[-180,180,1],'원본 회전'],
+['원본 반영','shapePres',.6,1,'형태 유지'],['원본 반영','patternPres',.55,1,'패턴 유지'],['원본 반영','posPres',.6,1,'색 위치 유지'],['원본 반영','origColor',.3,1,'원본 색 유지'],['원본 반영','abstraction',.35,1,'추상화 정도'],['원본 반영','srcInfluence',1,1,'원본 영향도'],['원본 반영','remap',.7,1,'팔레트 재매핑 강도'],
+['구조 복원','restore',.8,1,'형태 복원'],['구조 복원','detailKeep',.65,1,'세부 형태 유지'],['구조 복원','edgeKeep',.7,1,'경계 보존'],['구조 복원','lumStruct',.7,1,'원본 명암 구조'],['구조 복원','genMix',.45,1,'생성 효과 혼합'],['구조 복원','structLock',true,0,'구조 값 랜덤 제외 (잠금)'],
+['조리개','apEnabled',true,0,'조리개 활성화'],['조리개','apOpening',55,[0,100,1],'조리개 개방도 % (단일 상태)'],['조리개','apBlades',7,[5,12,1],'날개 수'],['조리개','apRot',0,[-180,180,1],'날개 회전'],['조리개','apX',.5,[-.2,1.2,.005],'조리개 중심 X'],['조리개','apY',.5,[-.2,1.2,.005],'조리개 중심 Y'],['조리개','apScale',1,[.3,2.6,.01],'조리개 크기'],['조리개','apIrreg',.25,1,'미세한 불규칙'],
+['조리개','apMask',.96,1,'조리개 마스크 강도'],['조리개','apSharp',.92,1,'조리개 경계 선명도'],['조리개','apTrans',.6,1,'빛 통과량 반영'],['조리개','apExpo',.5,1,'노출 자동 보정'],
+['조리개','apGeoVis',true,0,'조리개 구조 표시'],['조리개','apGeoOpacity',.6,1,'조리개 구조 불투명도'],['조리개','apBladeLine',.55,1,'날개 선 불투명도'],['조리개','apLineW',1,[.4,3,.05],'선 두께'],['조리개','apBladeFill',.02,[0,.2,.005],'날개 면 불투명도'],['조리개','apContour',true,0,'개구부 경계 표시'],['조리개','apPrevContour',true,0,'이전 상태 윤곽 표시'],['조리개','apGuides',false,0,'구성 가이드 표시'],
+['조리개','apLockLight',true,0,'조리개 연구 중 빛 고정'],['조리개','apDrag',AT[0],AT,'포인터 조작 대상'],['조리개','apKeep',true,0,'조리개 설정 유지'],
+['확산광','apDifRadius',.13,[.04,.6,.01],'확산 반경'],['확산광','apDifSoft',.7,1,'확산 부드러움'],['확산광','apDifInt',.85,[0,1.5,.01],'확산 강도'],['확산광','apDifOverlap',.4,1,'확산 겹침'],['확산광','apDifDrift',.3,1,'확산 흐름 이동'],
+['움직임 기록','apMode',AM[1],AM,'표현 방식'],['움직임 기록','apN',3,[2,5,1],'상태 수'],['움직임 기록','apStart',25,[0,100,1],'시작 개방도 (%)'],['움직임 기록','apEnd',80,[0,100,1],'끝 개방도 (%)'],['움직임 기록','apRot0',0,[-180,180,1],'시작 회전각'],['움직임 기록','apRotTotal',26,[-180,180,1],'회전 변화량'],['움직임 기록','apDir',AD[0],AD,'열림 / 닫힘'],['움직임 기록','apTrail',.8,1,'잔상 강도'],['움직임 기록','apPrevOp',.25,1,'이전 상태 불투명도'],['움직임 기록','apCurOp',.9,1,'현재 상태 불투명도'],['움직임 기록','apSpacing',.5,1,'상태 간격'],['움직임 기록','apBlend',AB[0],AB,'혼합 방식'],['움직임 기록','apTint',.35,1,'상태별 색 변화'],
+['제어값 기록','apAnn',false,0,'수치 표시'],['제어값 기록','apAnnNum',true,0,'상태 번호 표시'],['제어값 기록','apAnnOpen',true,0,'개방도 표시'],['제어값 기록','apAnnRot',true,0,'회전각 표시'],['제어값 기록','apAnnCoord',false,0,'좌표 표시'],['제어값 기록','apAnnLeader',true,0,'가이드라인 표시'],['제어값 기록','apAnnSize',1,[.6,2,.01],'텍스트 크기'],['제어값 기록','apAnnOp',.8,1,'텍스트 불투명도'],
+['재구성','recMode',REC[0],REC,'재구성 방식'],
+['구도','compMode',CM[1],CM,'구도 방식'],['구도','flowAngle',-25,[-90,90,1],'흐름 각도'],['구도','flowStrength',.7,1,'흐름 세기'],['구도','curvature',.5,1,'곡률'],['구도','massCount',110,[20,260,5],'덩어리 수'],['구도','massSize',75,[30,150,1],'덩어리 크기'],['구도','hier',.5,1,'크기 위계'],['구도','asym',.4,1,'비대칭'],['구도','centerX',.5,[.1,.9,.01],'중심 X'],['구도','centerY',.5,[.1,.9,.01],'중심 Y'],['구도','rot',0,[-180,180,1],'전체 회전'],['구도','gscale',1,[.4,1.6,.01],'전체 크기'],
+['패턴','patType',PT[0],PT,'패턴 변환 방식'],['패턴','patSize',1,[.4,2.5,.01],'패턴 크기'],['패턴','patDensity',.5,1,'패턴 밀도'],['패턴','patSoft',.7,1,'패턴 부드러움'],['패턴','patSpread',.5,1,'패턴 퍼짐'],['패턴','patOpacity',.7,1,'패턴 불투명도'],
+['색감','palMode',PM[0],PM,'팔레트 방식'],['색감','baseHue',330,[0,360,1],'기본 색상군'],['색감','hueSpread',45,[0,120,1],'색상 폭'],['색감','bright',.89,[.78,.96,.005],'밝기'],['색감','chroma',.085,[.03,.15,.005],'채도'],['색감','contrast',.5,1,'색상 대비'],['색감','accentRatio',.08,[0,.2,.005],'포인트 색 비율'],['색감','accentHue',0,[-60,60,1],'포인트 색상'],['색감','overlap',.7,1,'색 겹침 정도'],['색감','gradient',.5,1,'그라디언트 강도'],['색감','sunShift',.6,1,'빛 받은 색 변화'],['색감','shadowShift',.5,1,'그림자 색 변화'],
+['빛','lightCount',1,[1,3,1],'빛 개수'],['빛','lightX',.5,1,'빛 위치 X'],['빛','lightY',.5,1,'빛 위치 Y'],['빛','lightRadius',.4,[.1,.9,.01],'빛 크기'],['빛','lightIntensity',1,[.2,1.5,.01],'빛 세기'],['빛','lightFalloff',1.2,[.3,4,.05],'빛 퍼짐'],['빛','lightSoft',.8,[.2,1,.01],'빛 경계 부드러움'],['빛','glow',.5,1,'빛 발광'],['빛','lightMode',LM[1],LM,'빛 움직임'],['빛','lightSpeed',.6,[0,2,.01],'움직임 속도'],['빛','autoMotion',true,0,'자동 움직임'],['빛','mouseLight',true,0,'마우스로 빛 조절'],
+['경계','edgeOn',true,0,'경계 표시'],['경계','edgeStrength',.3,1,'경계 진하기'],['경계','edgeSoft',.7,1,'경계 부드러움'],['경계','edgeDissolve',.8,1,'경계 녹이기'],['경계','edgeOpacity',.4,1,'경계 투명도'],['경계','edgeTint',.4,1,'경계 색조'],
+['공기감','bloom',.3,1,'빛 번짐'],['공기감','diffusion',.3,1,'확산'],['공기감','softness',.5,1,'흐림'],['공기감','haze',.15,1,'안개감'],['공기감','overlapGlow',.4,1,'겹침 발광'],['공기감','grain',.25,1,'은은한 입자'],['공기감','air',.3,1,'공기감']];
+const DEF={};S.forEach(([f,k,d])=>DEF[k]=d);const P={seed:20260,W:1080,H:1080,paused:false,exportScale:1,transparent:false,...DEF};
+const AN=new Set(['invert','threshold','imageScale','imageRotation','abstraction']),NOREB=new Set(['빛','경계','공기감','조리개','확산광','움직임 기록','제어값 기록']);
+const NAMES=['원본 참고','구조 복원','외곽 형태','큰 색 덩어리','패턴','색 반응','빛','공기감','조리개 제어 이미지','확산광','조리개 구조','제어값 기록'];
+const eff=k=>P[k]*P.srcInfluence;
+let srcImg=null,srcId=0,pend=3,dirty=1,T=0,Tp=0,PS=1,PAL={};
+const ST={mass:[],pts:[],ls:[],Mb:null,cl:null,GW:1,GH:1,sc:1,mouse:null,pin:null,cf:null,ec:null,srcCv:null,SA:null,SV:null,F:null,cen:null,cenHue:null,bg:null,sigB:'',sigC:''};
+const msg=t=>$('#msg').textContent=t||'';
+
+/* ===== SourceAnalyzer: 윤곽 · 큰 덩어리 · 패턴 에너지 · 색 위치 ===== */
+function blur(a,w,h,r){r=Math.round(r);if(r<1)return a;const t=new Float32Array(a.length),o=new Float32Array(a.length);
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){let s=0,n=0;for(let k=-r;k<=r;k++){const xx=x+k;if(xx>=0&&xx<w){s+=a[y*w+xx];n++}}t[y*w+x]=s/n}
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){let s=0,n=0;for(let k=-r;k<=r;k++){const yy=y+k;if(yy>=0&&yy<h){s+=t[yy*w+x];n++}}o[y*w+x]=s/n}return o}
+// 원본이 없을 때: 색 구역과 점무늬가 있는 합성 "원본"을 만들어 같은 분석 파이프라인을 통과시킴
+function proc(x,w,h,r){const m=Math.min(w,h),n=4+(r()*3|0);for(let i=0;i<n;i++){const a=r()*TAU,d=r()*m*.22,px=w/2+Math.cos(a)*d,py=h/2+Math.sin(a)*d,rx=m*(.14+r()*.18),ry=rx*(.6+r()*.4),hue=r()*360;
+ x.save();x.translate(px,py);x.rotate(r()*3);x.scale(1,ry/rx);x.translate(-px,-py);const g=x.createRadialGradient(px,py,0,px,py,rx);g.addColorStop(0,`hsl(${hue},75%,62%)`);g.addColorStop(1,`hsl(${hue+25},70%,52%)`);x.fillStyle=g;x.beginPath();x.arc(px,py,rx,0,TAU);x.fill();
+ x.fillStyle=`hsl(${hue+150},80%,${r()<.5?35:88}%)`;for(let k=0;k<90;k++){const q=Math.sqrt(r())*rx*.9,t=r()*TAU;x.beginPath();x.arc(px+Math.cos(t)*q,py+Math.sin(t)*q,.5+r()*1.1,0,TAU);x.fill()}x.restore()}}
+function analyze(){msg('');const W=P.W,H=P.H,GW=W>=H?110:Math.round(110*W/H),GH=W>=H?Math.round(110*H/W):110,N=GW*GH,sc=W/GW,M=new Float32Array(N),R=new Float32Array(N),G=new Float32Array(N),B=new Float32Array(N);
+ try{if(srcImg){const k=Math.min(GW/srcImg.width,GH/srcImg.height),tw=Math.max(2,srcImg.width*k|0),th=Math.max(2,srcImg.height*k|0),c=cvs(tw,th),x=c.getContext('2d');x.drawImage(srcImg,0,0,tw,th);const d=x.getImageData(0,0,tw,th).data;
+  let al=false;for(let i=3;i<d.length;i+=4)if(d[i]<200){al=true;break}
+  let br=0,bg=0,bb=0,n=0;const bp=(a,b)=>{const i=(b*tw+a)*4;br+=d[i];bg+=d[i+1];bb+=d[i+2];n++};for(let i=0;i<tw;i++){bp(i,0);bp(i,th-1)}for(let j=0;j<th;j++){bp(0,j);bp(tw-1,j)}br/=n;bg/=n;bb/=n;ST.bg={al,br,bg,bb};
+  const ca=Math.cos(-P.imageRotation*Math.PI/180),sa=Math.sin(-P.imageRotation*Math.PI/180),sk=P.imageScale;
+  for(let gy=0;gy<GH;gy++)for(let gx=0;gx<GW;gx++){const X=(gx+.5-GW/2)/sk,Y=(gy+.5-GH/2)/sk,u=X*ca-Y*sa+tw/2,v=X*sa+Y*ca+th/2;if(u>=0&&v>=0&&u<tw&&v<th){const q=((v|0)*tw+(u|0))*4,i=gy*GW+gx,m=al?d[q+3]/255:clamp((Math.hypot(d[q]-br,d[q+1]-bg,d[q+2]-bb)/441-P.threshold)/.08);M[i]=P.invert?1-m:m;R[i]=d[q]/255;G[i]=d[q+1]/255;B[i]=d[q+2]/255}}
+  ST.srcCv=null}else{const c=cvs(GW,GH),x=c.getContext('2d');proc(x,GW,GH,RNG(P.seed*7+3));const d=x.getImageData(0,0,GW,GH).data;for(let i=0;i<N;i++){M[i]=d[i*4+3]/255;R[i]=d[i*4]/255;G[i]=d[i*4+1]/255;B[i]=d[i*4+2]/255}ST.srcCv=c}}
+ catch(e){msg('이미지 분석 실패: '+e.message)}
+ const ab=P.abstraction,rm=1+ab*2.5,Mb=blur(blur(M,GW,GH,rm),GW,GH,rm);Object.assign(ST,{GW,GH,sc,Mb:null,cl:null,Ak:null,ec:null,cen:null});
+ let idx=[];for(let i=0;i<N;i++)if(Mb[i]>.5)idx.push(i);if(!idx.length){if(srcImg)msg('윤곽을 찾지 못했어요 — 배경 분리 민감도나 원본 반전을 조절해 보세요.');return}ST.Mb=Mb;
+ const L0=new Float32Array(N),A0=new Float32Array(N),B0=new Float32Array(N);for(let i=0;i<N;i++){const o=lab(R[i],G[i],B[i]);L0[i]=o[0];A0[i]=o[1];B0[i]=o[2]}
+ const E=new Float32Array(N);for(let y=1;y<GH-1;y++)for(let x=1;x<GW-1;x++){let s=0,s2=0,t=0,t2=0;for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++){const j=(y+a)*GW+x+b,v=L0[j]*2+Math.hypot(A0[j],B0[j])*2;s+=v;s2+=v*v;t++}const m=s/t;E[i0(x,y)]=Math.sqrt(Math.max(0,s2/t-m*m))}
+ function i0(x,y){return y*GW+x}
+ const ev=idx.map(i=>E[i]).sort((a,b)=>a-b),e90=ev[Math.floor(ev.length*.9)]||1;for(let i=0;i<N;i++)E[i]=clamp(E[i]/(e90||1));ST.E=blur(E,GW,GH,1+ab*2);
+ const rb=Math.round(ab*2),Lk=blur(L0,GW,GH,rb),Ak=blur(A0,GW,GH,rb),Bk=blur(B0,GW,GH,rb);Object.assign(ST,{Lk,Ak,Bk});
+ // 색 위치 지도: 원본 색을 4개 구역으로 묶고 위치를 기억
+ const K=4,ft=i=>[Ak[i],Bk[i],Lk[i]*.6],dd=(a,b)=>(a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2,rr=RNG(P.seed+11),ce=[ft(idx[rr()*idx.length|0])];
+ while(ce.length<K){let bi=idx[0],bd=-1;for(const i of idx){let d=1e9;for(const c of ce)d=Math.min(d,dd(ft(i),c));if(d>bd){bd=d;bi=i}}ce.push(ft(bi))}
+ for(let it=0;it<7;it++){const sm=ce.map(()=>[0,0,0,0]);for(const i of idx){const f=ft(i);let b=0,bd=1e9;ce.forEach((c,k)=>{const d=dd(f,c);if(d<bd){bd=d;b=k}});const s=sm[b];s[0]+=f[0];s[1]+=f[1];s[2]+=f[2];s[3]++}sm.forEach((s,k)=>{if(s[3])ce[k]=[s[0]/s[3],s[1]/s[3],s[2]/s[3]]})}
+ const hue=ce.map(c=>(Math.atan2(c[1],c[0])*180/Math.PI+360)%360),order=[0,1,2,3].sort((a,b)=>hue[a]-hue[b]),rank=[];order.forEach((k,r)=>rank[k]=r);ST.cen=[];ST.cenHue=[];ce.forEach((c,k)=>{ST.cen[rank[k]]=c;ST.cenHue[rank[k]]=hue[k]});
+ const cl=new Uint8Array(N);for(let i=0;i<N;i++){const f=ft(i);let b=0,bd=1e9;ce.forEach((c,k)=>{const d=dd(f,c);if(d<bd){bd=d;b=k}});cl[i]=rank[b]}ST.cl=cl;
+ // 경계(윤곽 가장자리) 마스크: 색은 그릴 때 입힘
+ const ec=cvs(GW,GH),ex=ec.getContext('2d'),id=ex.createImageData(GW,GH);for(let y=1;y<GH-1;y++)for(let x=1;x<GW-1;x++){const i=y*GW+x,gx=Mb[i+1]-Mb[i-1],gy=Mb[i+GW]-Mb[i-GW];const q=i*4;id.data[q]=id.data[q+1]=id.data[q+2]=255;id.data[q+3]=clamp(Math.hypot(gx,gy)*1.8)*255}ex.putImageData(id,0,0);ST.ec=ec;structAnalyze()}
+
+
+/* ===== Structural Analyzer (고해상도 ≈480px) ===== 기존 110 grid 분석은 색 덩어리·빛·추상 구성용으로 유지하고,
+   실루엣 · 국소 경계 · 명암 구조 · 내부 색 경계 · 작은 형태의 방향을 별도의 고해상도 맵으로 추출한다. */
+const SRES=480;
+function boxb(a,w,h,r){r=Math.round(r);if(r<1)return a;const t=new Float32Array(a.length),o=new Float32Array(a.length),n=2*r+1,cl=(v,m)=>v<0?0:v>m?m:v;
+ for(let y=0;y<h;y++){const q=y*w;let s=0;for(let k=-r;k<=r;k++)s+=a[q+cl(k,w-1)];for(let x=0;x<w;x++){t[q+x]=s/n;s+=a[q+cl(x+r+1,w-1)]-a[q+cl(x-r,w-1)]}}
+ for(let x=0;x<w;x++){let s=0;for(let k=-r;k<=r;k++)s+=t[cl(k,h-1)*w+x];for(let y=0;y<h;y++){o[y*w+x]=s/n;s+=t[cl(y+r+1,h-1)*w+x]-t[cl(y-r,h-1)*w+x]}}return o}
+// 마스크 가중 블러: 배경색이 대상 안쪽으로 번지지 않는다
+function nb(a,m,w,h,r){r=Math.round(r);if(r<1)return a;const am=new Float32Array(a.length),o=new Float32Array(a.length);for(let i=0;i<a.length;i++)am[i]=a[i]*m[i];
+ const n=boxb(am,w,h,r),d=boxb(m,w,h,r);for(let i=0;i<a.length;i++)o[i]=d[i]>.02?n[i]/d[i]:a[i];return o}
+function sobel(a,w,h){const gx=new Float32Array(a.length),gy=new Float32Array(a.length);
+ for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){const i=y*w+x;gx[i]=(a[i-w+1]+2*a[i+1]+a[i+w+1]-a[i-w-1]-2*a[i-1]-a[i+w-1])/8;gy[i]=(a[i+w-1]+2*a[i+w]+a[i+w+1]-a[i-w-1]-2*a[i-w]-a[i-w+1])/8}return[gx,gy]}
+function pctl(a,m,p,thr){let n=0;for(let i=0;i<a.length;i++)if(m[i]>thr)n++;if(!n)return 0;const v=new Float32Array(n);let j=0;for(let i=0;i<a.length;i++)if(m[i]>thr)v[j++]=a[i];v.sort();return v[Math.min(n-1,Math.floor(n*p))]}
+function structAnalyze(){const W=P.W,H=P.H,SW=W>=H?SRES:Math.round(SRES*W/H),SH=W>=H?Math.round(SRES*H/W):SRES,N=SW*SH,
+ key=[srcImg?srcId:'p'+P.seed,P.imageScale,P.imageRotation,P.invert,P.threshold,W,H].join('|');
+ if(ST.SA&&ST.SA.key==key)return;ST.SA=null;ST.sigB=ST.sigC='';
+ try{const M=new Float32Array(N),L0=new Float32Array(N),A0=new Float32Array(N),B0=new Float32Array(N),c=cvs(SW,SH),x=c.getContext('2d');x.imageSmoothingQuality='high';let inb=null;
+  if(srcImg){const k=Math.min(SW/srcImg.width,SH/srcImg.height)*P.imageScale,iw=srcImg.width*k,ih=srcImg.height*k,rt=P.imageRotation*Math.PI/180;
+   x.translate(SW/2,SH/2);x.rotate(rt);x.drawImage(srcImg,-iw/2,-ih/2,iw,ih);
+   const bc=cvs(SW,SH),bx=bc.getContext('2d');bx.translate(SW/2,SH/2);bx.rotate(rt);bx.fillStyle='#fff';bx.fillRect(-iw/2,-ih/2,iw,ih);   // 원본이 놓인 영역
+   const bd=bx.getImageData(0,0,SW,SH).data;inb=new Float32Array(N);for(let i=0;i<N;i++)inb[i]=bd[i*4+3]/255}
+  else{x.scale(SW/ST.GW,SH/ST.GH);proc(x,ST.GW,ST.GH,RNG(P.seed*7+3))}
+  const d=x.getImageData(0,0,SW,SH).data,bg=ST.bg||{al:false,br:0,bg:0,bb:0};
+  for(let i=0;i<N;i++){const q=i*4,cov=d[q+3]/255;let m;
+   if(srcImg){m=bg.al?cov:clamp((Math.hypot(d[q]-bg.br,d[q+1]-bg.bg,d[q+2]-bg.bb)/441-P.threshold)/.08);if(P.invert)m=1-m;m*=inb[i]}else m=cov;
+   M[i]=m;const o=lab(d[q]/255,d[q+1]/255,d[q+2]/255);L0[i]=o[0];A0[i]=o[1];B0[i]=o[2]}
+  const Mh=boxb(M,SW,SH,1);let ins=0;for(let i=0;i<N;i++)if(Mh[i]>.5)ins++;if(ins<N*.0005)return;
+  const Ls=nb(L0,Mh,SW,SH,1),As=nb(A0,Mh,SW,SH,1),Bs=nb(B0,Mh,SW,SH,1),Lc=nb(L0,Mh,SW,SH,2),Ac=nb(A0,Mh,SW,SH,2),Bc=nb(B0,Mh,SW,SH,2);
+  // 경계: 명암 경계 · 내부 색 경계 · 실루엣 경계를 따로 구한다
+  const[lx,ly]=sobel(Ls,SW,SH),[ax,ay]=sobel(As,SW,SH),[bx2,by2]=sobel(Bs,SW,SH),[sx,sy]=sobel(Mh,SW,SH),gl=new Float32Array(N),gc=new Float32Array(N),gs=new Float32Array(N);
+  for(let i=0;i<N;i++){gl[i]=Math.hypot(lx[i],ly[i]);gc[i]=Math.hypot(ax[i],ay[i],bx2[i],by2[i])*1.6;gs[i]=Math.hypot(sx[i],sy[i])}
+  const pl=Math.max(.035,pctl(gl,Mh,.92,.7)),pc=Math.max(.03,pctl(gc,Mh,.92,.7)),Ein=new Float32Array(N),E=new Float32Array(N);
+  for(let i=0;i<N;i++){Ein[i]=clamp(Math.max(gl[i]/pl,gc[i]/pc));E[i]=Math.max(Ein[i]*sstep(.1,.5,Mh[i]),clamp(gs[i]*3.2))}
+  // 작은 형태의 방향: 구조 텐서 (명암 + 색 + 실루엣 기울기)
+  const jxx=new Float32Array(N),jyy=new Float32Array(N),jxy=new Float32Array(N);
+  for(let i=0;i<N;i++){const a1=lx[i],a2=ly[i],b1=1.6*ax[i],b2=1.6*ay[i],c1=1.6*bx2[i],c2=1.6*by2[i],s1=2.5*sx[i],s2=2.5*sy[i];jxx[i]=a1*a1+b1*b1+c1*c1+s1*s1;jyy[i]=a2*a2+b2*b2+c2*c2+s2*s2;jxy[i]=a1*a2+b1*b2+c1*c2+s1*s2}
+  const Jxx=boxb(jxx,SW,SH,3),Jyy=boxb(jyy,SW,SH,3),Jxy=boxb(jxy,SW,SH,3),Es=boxb(E,SW,SH,2),tan=new Float32Array(N),coh=new Float32Array(N);
+  for(let i=0;i<N;i++){const a=Jxx[i],b=Jyy[i],cc=Jxy[i],tr=a+b;coh[i]=tr>1e-9?Math.hypot(a-b,2*cc)/tr*sstep(.12,.5,Es[i]):0;tan[i]=.5*Math.atan2(2*cc,a-b)+Math.PI/2}
+  // 세부(작은 스케일) 맵: 대역 통과
+  const Lb=nb(Ls,Mh,SW,SH,3),Ab=nb(As,Mh,SW,SH,3),Bb=nb(Bs,Mh,SW,SH,3),bnd=new Float32Array(N);
+  for(let i=0;i<N;i++)bnd[i]=Math.abs(Ls[i]-Lb[i])+1.4*(Math.abs(As[i]-Ab[i])+Math.abs(Bs[i]-Bb[i]));
+  const bs=boxb(bnd,SW,SH,1),pd=Math.max(.02,pctl(bs,Mh,.92,.7)),D=new Float32Array(N);for(let i=0;i<N;i++)D[i]=clamp(bs[i]/pd)*sstep(.1,.5,Mh[i]);
+  // 명암 구조: 대상 안에서 대비를 늘린 L, 그리고 중간 스케일 음영
+  const lo=pctl(Ls,Mh,.04,.7),hi=Math.max(pctl(Ls,Mh,.96,.7),lo+.08),Ln=new Float32Array(N);for(let i=0;i<N;i++)Ln[i]=clamp((Ls[i]-lo)/(hi-lo));
+  const Lbase=nb(Ln,Mh,SW,SH,Math.round(SW/56)),ei=[];for(let i=0;i<N;i++)if(E[i]>.6&&Mh[i]>.15&&(Math.imul(i,2654435761)>>>0)%3==0)ei.push(i);
+  ST.SA={key,SW,SH,Mh,E,Ein,D,Ln,Lbase,tan,coh,Lc,Ac,Bc,edgeIdx:Int32Array.from(ei)}}
+ catch(e){msg('구조 분석 실패: '+e.message)}}
+
+/* ===== 구조 복원 레이어 생성: 원본 RGB는 버리고 형태·명암·내부 경계만 가져와 현재 팔레트로 다시 칠한다 ===== */
+function structBuild(){const SA=ST.SA;if(!SA||!ST.Mb||!ST.cen){ST.SV=null;return}
+ const{SW,SH}=SA,N=SW*SH,R=clamp(eff('restore')),dk=clamp(eff('detailKeep')),ek=clamp(eff('edgeKeep')),lm=clamp(eff('lumStruct')),ppRaw=eff('posPres'),pp=clamp(lerp(ppRaw,1,R)),
+ sigB=[SA.key,ST.cen.map(c=>c.map(v=>v.toFixed(3)).join()).join(';'),R,dk,ek,lm,P.diffusion,P.softness,ppRaw].join('|');
+ if(sigB!=ST.sigB){ST.sigB=sigB;ST.sigC='';
+  const{Mh,E,Ein,D,Ln,Lbase,Lc,Ac,Bc}=SA,cen=ST.cen,cenHue=ST.cenHue,GW=ST.GW,GH=ST.GH,Z=new Uint8Array(N);let tv=new Float32Array(N),tone=new Float32Array(N);
+  // (1) 색 영역 라벨: 고해상도 픽셀을 저해상도 분석의 색 군집에 배정 (형태 복원이 높을수록 원본의 색 위치를 그대로 따른다)
+  for(let y=0;y<SH;y++)for(let x=0;x<SW;x++){const i=y*SW+x,f0=Ac[i],f1=Bc[i],f2=Lc[i]*.6;let b=0,bd=1e9;
+   for(let k=0;k<4;k++){const c=cen[k],dd=(f0-c[0])**2+(f1-c[1])**2+(f2-c[2])**2;if(dd<bd){bd=dd;b=k}}
+   const gx=x*GW/SW,gy=y*GH/SH;if(!(noise(gx*.1,gy*.1,5)<pp))b=(noise(gx*.07+3,gy*.07,8)*4|0)%4;Z[i]=b}
+  if(dk<.55){const Z2=Z.slice();for(let y=1;y<SH-1;y++)for(let x=1;x<SW-1;x++){const i=y*SW+x,cnt=[0,0,0,0];for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++)cnt[Z[i+a*SW+b]]++;let b=Z[i];for(let k=0;k<4;k++)if(cnt[k]>cnt[b])b=k;Z2[i]=b}Z.set(Z2)}
+  // (2) 톤(명암 구조) · 색 편차(내부 색 경계) 필드
+  const gd=.3+dk;for(let i=0;i<N;i++){const ang=Math.atan2(Bc[i],Ac[i])*180/Math.PI,hd=((ang-cenHue[Z[i]]+540)%360)-180,ch=Math.hypot(Ac[i],Bc[i]);
+   tv[i]=clamp(hd/55,-1,1)*sstep(.012,.045,ch);tone[i]=clamp(Lbase[i]+gd*(Ln[i]-Lbase[i])-Ein[i]*ek*lm*.1)}
+  // (3) 형태 복원이 낮을수록 실루엣·톤·라벨이 점점 풀리며 추상으로 이어진다 (1에서는 블러 없음)
+  const rb=Math.ceil(Math.pow(1-R,1.7)*13*SW/480*.7);let Ms=Mh,wts=null;
+  if(rb>=1){Ms=boxb(boxb(Mh,SW,SH,rb),SW,SH,rb);tone=nb(nb(tone,Mh,SW,SH,rb),Mh,SW,SH,rb);tv=nb(nb(tv,Mh,SW,SH,rb),Mh,SW,SH,rb);
+   wts=[0,1,2,3].map(k=>{const oh=new Float32Array(N);for(let i=0;i<N;i++)oh[i]=Z[i]==k?1:0;return nb(nb(oh,Mh,SW,SH,rb),Mh,SW,SH,rb)})}
+  // (4) 경계를 막는 확산: 같은 색 영역 안쪽에서만 부드럽게 퍼지고, 실루엣·내부 경계·작은 형태 앞에서는 멈춘다
+  const kE=lerp(.85,.12,ek),leak=(1-ek)*.9,cx=new Float32Array(N),cy=new Float32Array(N),st=new Float32Array(N);for(let i=0;i<N;i++)st[i]=Math.max(E[i],D[i]*dk*.9);
+  for(let y=0;y<SH;y++)for(let x=0;x<SW;x++){const i=y*SW+x;
+   if(x<SW-1){const j=i+1,m=Math.max(st[i],st[j]);cx[i]=Mh[i]>.3&&Mh[j]>.3?(1/(1+(m/kE)**2))*(Z[i]==Z[j]?1:leak):0}
+   if(y<SH-1){const j=i+SW,m=Math.max(st[i],st[j]);cy[i]=Mh[i]>.3&&Mh[j]>.3?(1/(1+(m/kE)**2))*(Z[i]==Z[j]?1:leak):0}}
+  let ta=tone,tb=new Float32Array(N),va=tv,vb=new Float32Array(N);const it=4+Math.round(P.diffusion*6+P.softness*6),lam=.22;
+  for(let n=0;n<it;n++){for(let y=0;y<SH;y++)for(let x=0;x<SW;x++){const i=y*SW+x;if(Mh[i]<.05){tb[i]=ta[i];vb[i]=va[i];continue}let s1=0,s2=0;
+    if(x<SW-1){const c=cx[i];s1+=c*(ta[i+1]-ta[i]);s2+=c*(va[i+1]-va[i])}if(x>0){const c=cx[i-1];s1+=c*(ta[i-1]-ta[i]);s2+=c*(va[i-1]-va[i])}
+    if(y<SH-1){const c=cy[i];s1+=c*(ta[i+SW]-ta[i]);s2+=c*(va[i+SW]-va[i])}if(y>0){const c=cy[i-SW];s1+=c*(ta[i-SW]-ta[i]);s2+=c*(va[i-SW]-va[i])}
+    tb[i]=ta[i]+lam*s1;vb[i]=va[i]+lam*s2}
+   let q=ta;ta=tb;tb=q;q=va;va=vb;vb=q}
+  // (5) 실루엣 알파: 경계 보존이 높을수록 또렷하게
+  const w=lerp(.3,.06,ek),al=new Float32Array(N);for(let i=0;i<N;i++)al[i]=sstep(.5-w,.5+w,Ms[i]);
+  ST.F={Z,tone:ta,tv:va,al,wts,SW,SH}}
+ // (6) 현재 PaletteSystem + 색 반응(shadow/mid/lit)으로 칠하기. 빛은 프레임마다 합성에서만 적용
+ const F=ST.F,oc=P.origColor*(1-P.remap),sigC=sigB+'#'+JSON.stringify(PAL.zones)+[P.shadowShift,P.sunShift,P.hueSpread,oc].join();
+ if(sigC==ST.sigC&&ST.SV)return;ST.sigC=sigC;
+ const NT=9,NV=40,sh=P.shadowShift,su=P.sunShift,hs=P.hueSpread*.3+12+oc*40,lut=[];
+ for(let z=0;z<4;z++){const zn=PAL.zones[z],cz=ST.cen[z],zh=hl(zn.h,ST.cenHue[z],oc),zc=lerp(zn.C,clamp(Math.hypot(cz[0],cz[1])*.6+.02,.04,.14),oc);
+  for(let v=0;v<3;v++)for(let ti=0;ti<NT;ti++)for(let li=0;li<NV;li++){const t=ti/(NT-1)*2-1,tn=li/(NV-1),Lhi=Math.min(.975,zn.L+.04),amp=.09+.3*lm;
+   let L=Math.max(.6,lerp(Lhi-amp,Lhi,tn)),C=zc*(1+(1-tn)*.55*lm+Math.abs(t)*.12),h=zh+t*hs;       // 어두운 곳은 검정이 아니라 더 진한 파스텔로
+   if(v==0){L=Math.max(.58,L-.07*sh-.01);C*=1+.1*sh;h=hl(h,290,.32*sh)}else if(v==2){L=Math.min(.985,L+.06*su+.02);C=C*(1-.18*su)+.01;h=hl(h,75,.2*su)}
+   lut[((z*3+v)*NT+ti)*NV+li]=ok(L,C,h)}}
+ const SV=[0,1,2].map(()=>cvs(SW,SH)),ids=SV.map(c=>c.getContext('2d').createImageData(SW,SH));
+ for(let i=0;i<SW*SH;i++){const a=F.al[i];if(a<.004)continue;
+  const ti=Math.max(0,Math.min(NT-1,Math.round((F.tv[i]+1)/2*(NT-1)))),li=Math.round(clamp(F.tone[i])*(NV-1));
+  for(let v=0;v<3;v++){let r=0,g=0,b=0;
+   if(F.wts){let sw=0;for(let z=0;z<4;z++){const w=F.wts[z][i];if(w>.002){const c=lut[((z*3+v)*NT+ti)*NV+li];r+=w*c[0];g+=w*c[1];b+=w*c[2];sw+=w}}if(sw>0){r/=sw;g/=sw;b/=sw}}
+   else{const c=lut[((F.Z[i]*3+v)*NT+ti)*NV+li];r=c[0];g=c[1];b=c[2]}
+   const q=i*4,dd=ids[v].data;dd[q]=r;dd[q+1]=g;dd[q+2]=b;dd[q+3]=a*255}}
+ SV.forEach((c,v)=>c.getContext('2d').putImageData(ids[v],0,0));ST.SV=SV}
+
+/* ===== PaletteSystem / ColorMapSystem ===== */
+const tri=z=>{const sh=P.shadowShift,su=P.sunShift;return[ok(Math.max(.74,z.L-.07*sh-.01),z.C*(1+.1*sh),hl(z.h,290,.32*sh)),ok(z.L,z.C,z.h),ok(Math.min(.985,z.L+.06*su+.02),z.C*(1-.18*su)+.01,hl(z.h,75,.2*su))]};
+function palette(){const r=RNG(P.seed*17+9),m=PM.indexOf(P.palMode);let bh=P.baseHue;if(m==2)bh=10+(((bh%360)+360)%360)/360*60;if(m==3)bh=190+(((bh%360)+360)%360)/360*70;
+ const zones=[0,1,2,3].map(i=>({L:clamp(P.bright+(i%2?-1:1)*.02*P.contrast*2,.74,.97),C:P.chroma*(.8+.4*((i*5)%4)/3),h:m==4?bh+i*90:m==5?bh+(i-1.5)*6:bh+(i-1.5)*P.hueSpread/1.5}));
+ const ah=[bh+180,bh+(r()<.5?150:210),bh+190,bh-165,bh+45,bh+165][m]+P.accentHue;
+ PAL={zones,acc:{L:clamp(P.bright-.1,.62,.9),C:clamp(P.chroma*2.1,.1,.22),h:ah},bg:ok(.975,.02,bh),veil:ok(.82,.06,hl(bh,290,.3)),hazeC:ok(.98,.03,bh),bh};PAL.acc3=tri(PAL.acc)}
+function zoneAt(gx,gy){gx=clamp(gx|0,0,ST.GW-1);gy=clamp(gy|0,0,ST.GH-1);const i=gy*ST.GW+gx,pp=eff('posPres'),oc=P.origColor*(1-P.remap);
+ const z=ST.Mb&&ST.Mb[i]>.35&&noise(gx*.1,gy*.1,5)<pp?ST.cl[i]:(noise(gx*.07+3,gy*.07,8)*4|0)%4,pc=PAL.zones[z];if(!ST.Ak||oc<=0)return pc;
+ const a=ST.Ak[i],b=ST.Bk[i];return{L:clamp(pc.L+(ST.Lk[i]-.55)*.1,.74,.97),C:lerp(pc.C,clamp(Math.hypot(a,b)*.6+.02,.04,.14),oc),h:hl(pc.h,Math.atan2(b,a)*180/Math.PI,oc)}}
+
+/* ===== CompositionEngine + PatternTranslator ===== */
+function cand(i,t,r,CL){const cv=P.curvature,as=P.asym;t=Math.pow(t,1+as*1.2);let u,v;
+ switch(i){case 0:u=2*t-1;v=.25*cv*(u*u-.3);break;case 1:u=2*t-1;v=.5*cv*Math.sin(u*2.2+as*2);break;
+ case 2:{const k=1+(r()*3|0),a=t*TAU;u=.25*as+(.3+k*.2)*Math.cos(a);v=(.25+k*.15)*Math.sin(a);break}
+ case 3:{const c=CL[r()*3|0];u=c[0]+gauss(r)*.22;v=c[1]+gauss(r)*.22;break}
+ case 4:{const a=t*TAU*(1+cv*1.5),q=.1+t*.9;u=q*Math.cos(a);v=q*Math.sin(a);break}
+ case 5:{const a=Math.floor(r()*12)/12*TAU+gauss(r)*.05,q=.05+Math.pow(t,1.2)*.95;u=q*Math.cos(a);v=q*Math.sin(a);break}
+ default:u=2*t-1;v=.35*Math.sin(u*2.6*(1+cv))}return[u,v]}
+function layout(){const W=P.W,H=P.H,r=RNG(P.seed*13+1),n=P.massCount|0,A=P.flowAngle*Math.PI/180,gA=P.rot*Math.PI/180,mi=Math.max(0,CM.indexOf(P.compMode)),ca=Math.cos(A),sa=Math.sin(A),cg=Math.cos(gA),sg=Math.sin(gA),
+ CL=[0,1,2].map(()=>[(r()-.5)*1.3,(r()-.5)*1.3]),base=Math.min(W,H)*P.massSize/1000*(1+P.abstraction*.5),sh=eff('shapePres'),sig=.02+(1-P.flowStrength)*.35,{GW,GH,sc,Mb,E}=ST,mass=[];
+ const SA=ST.SA,eR=eff('restore'),dkp=eff('detailKeep'),sm=(a,x,y)=>a[clamp(y/H*SA.SH|0,0,SA.SH-1)*SA.SW+clamp(x/W*SA.SW|0,0,SA.SW-1)];
+ const pick=()=>{for(let k=0;k<40;k++){const gx=r()*GW|0,gy=r()*GH|0;if(Mb[gy*GW+gx]>.5)return[(gx+r())*sc,(gy+r())*sc]}return null};
+ for(let at=0;at<n*20&&mass.length<n;at++){let x,y,p;
+  if(SA&&SA.edgeIdx.length&&r()<sh*eR*.22){const q=SA.edgeIdx[r()*SA.edgeIdx.length|0];x=((q%SA.SW)+r())*W/SA.SW+gauss(r)*(1-sh)*base*.3;y=(((q/SA.SW)|0)+r())*H/SA.SH+gauss(r)*(1-sh)*base*.3}   // 형태 유지: 덩어리 일부를 실제 윤곽선 위에 배치
+  else if(Mb&&r()<sh*.75&&(p=pick())){x=p[0]+gauss(r)*(1-sh)*base*1.2;y=p[1]+gauss(r)*(1-sh)*base*1.2}
+  else{let[u,v]=cand(mi,r(),r,CL),xx=u*ca-v*sa+gauss(r)*sig,yy=u*sa+v*ca+gauss(r)*sig;x=W*P.centerX+(xx*cg-yy*sg)*W*.5*P.gscale;y=H*P.centerY+(xx*sg+yy*cg)*H*.5*P.gscale;
+   if(x<-30||y<-30||x>W+30||y>H+30)continue;if(Mb){const gx=x/sc|0,gy=y/sc|0;if(!(gx>=0&&gy>=0&&gx<GW&&gy<GH&&Mb[gy*GW+gx]>.5)&&r()>.05+(1-sh)*.6)continue}}
+  let rx=base*(.55+.9*Math.pow(r(),2)+P.hier*Math.pow(r(),4)*1.6);if(SA)rx*=1-.5*sh*dkp*sm(SA.D,x,y);   // 세부가 많은 곳은 작은 덩어리
+  mass.push({x,y,rx,ry:rx*(.55+.45*r()),rot:lerp(r()*TAU,A+gA,.6),c3:tri(zoneAt(x/sc,y/sc)),res:r(),sAcc:r(),I:0,ins:SA?sstep(.3,.7,sm(SA.Mh,x,y)):1})}
+ ST.mass=mass;
+ // 패턴 변환: 선·도형 대신 부드러운 반점/덩어리/점 무리로 번역
+ const pts=[],np=Math.min(700,60+P.patDensity*600|0),u=Math.min(W,H)/1000*P.patSize,pp=eff('patternPres'),pi=PT.indexOf(P.patType);
+ // 고해상도 경계·세부 맵으로 작은 형태의 위치와 방향을 따라 반점을 놓는다 (겹침을 줄여 윤곽을 따라 고르게 분포)
+ const cs=Math.max(5,u*9),ocw=Math.ceil(W/cs)+1,occ=new Uint8Array(ocw*(Math.ceil(H/cs)+1));
+ for(let at=0;at<np*10&&pts.length<np*(pi==2?2:1.2);at++){let x,y,e=.5,d=.5,co=0,th=r()*TAU;
+  if(Mb){
+   if(SA){const sx=r()*SA.SW|0,sy=r()*SA.SH|0,i=sy*SA.SW+sx;if(!(SA.Mh[i]>.5||r()<.03))continue;d=SA.D[i];e=Math.max(SA.E[i],d*.9);if(r()>lerp(1,clamp(.1+e*1.1),pp))continue;
+    x=(sx+r())*W/SA.SW;y=(sy+r())*H/SA.SH;co=SA.coh[i]*pp;if(r()<co)th=SA.tan[i]+gauss(r)*(1-co)*.5}
+   else{const gx=r()*GW|0,gy=r()*GH|0,i=gy*GW+gx;e=ST.E[i];if(!(Mb[i]>.5||r()<.03)||r()>lerp(1,e,pp))continue;x=(gx+r())*sc;y=(gy+r())*sc}
+  }else{x=r()*W;y=r()*H}
+  const ty=pi==5?r()*5|0:pi;if(ty!=2){const oi=((y/cs)|0)*ocw+((x/cs)|0);if(occ[oi]&&r()<.85)continue;occ[oi]=1}
+  const z=zoneAt(x/sc,y/sc),c3=tri({L:Math.min(.96,z.L+.03),C:z.C*1.05,h:z.h}),sp=1+P.patSpread*1.5,sz=1-.4*d*pp,ins=SA?sstep(.3,.7,sm(SA.Mh,x,y)):1;
+  if(ty==2){const k=3+(r()*4|0),ct=Math.cos(th),st=Math.sin(th);for(let j=0;j<k;j++){const a1=gauss(r)*14*u*sp,a2=gauss(r)*14*u*sp*(1-.65*co);pts.push({x:x+ct*a1-st*a2,y:y+st*a1+ct*a2,r:(2.5+r()*2.5)*u*sz,ty:2,c3,E:e,rot:th,asp:1,ins,res:r()})}}
+  else pts.push({x,y,r:u*[[7,16],[22,45],0,[45,80],[16,32]][ty].reduce((a,b)=>a+(b-a)*r())*(1+P.patSpread*.4)*sz,ty,c3,E:e,rot:th,asp:(ty==3?.8:.75)*(1-.45*co),ins,res:r()})}
+ ST.pts=pts;
+ // 색 위치 필드(외곽 형태 레이어): 구역별로 새 팔레트를 입힌 부드러운 색 지도
+ const cf=cvs(GW,GH),cx=cf.getContext('2d'),id=cx.createImageData(GW,GH),cache={};
+ for(let y=0;y<GH;y++)for(let x=0;x<GW;x++){const i=y*GW+x,a=Mb?Mb[i]:0;if(a<.05)continue;const z=zoneAt(x,y),k=Math.round(z.L*100)+'_'+Math.round(z.C*600)+'_'+Math.round(z.h/3),c=cache[k]||(cache[k]=ok(z.L,z.C,z.h));
+  id.data[i*4]=c[0];id.data[i*4+1]=c[1];id.data[i*4+2]=c[2];id.data[i*4+3]=sstep(.3,.8,a)*210}cx.putImageData(id,0,0);ST.cf=cf}
+function rebuild(){apReb++;const p=pend;pend=0;if(p&1)analyze();palette();try{structBuild()}catch(e){ST.SV=null;msg('구조 복원 실패: '+e.message)}layout();apReb++;dirty=1}
+
+/* ===== LightField ===== */
+const lv=n=>n>0?clamp(Math.pow(sstep(0,P.lightSoft,n),P.lightFalloff)*P.lightIntensity):0;
+function lightsAt(){const W=P.W,H=P.H,t=T,m=LM.indexOf(P.lightMode),R=P.lightRadius*Math.min(W,H);let x=P.lightX,y=P.lightY;
+ if(m==1){x=.5+.3*Math.sin(t*.37+1)+.12*Math.sin(t*.91);y=.5+.28*Math.cos(t*.29)+.1*Math.sin(t*.73)}else if(m==2){x=.5+.3*Math.cos(t*.5);y=.5+.3*Math.sin(t*.5)}
+ else if(m==3)x=.5+.5*Math.sin(t*.4);else if(m==4)y=.5+.5*Math.sin(t*.4);else if(m==5){x=noise(t*.2,1,7);y=noise(t*.2,9,7)}
+ const lk=P.apEnabled&&P.apLockLight;if(lk){x=P.lightX;y=P.lightY}const L=[{x:x*W,y:y*H,R}];if(lk){}else if(ST.pin)Object.assign(L[0],ST.pin);else if(ST.mouse&&(m==0||P.mouseLight))Object.assign(L[0],ST.mouse);
+ for(let i=1;i<P.lightCount;i++){const a=(lk?0:t*.3*P.lightSpeed)+i*TAU/P.lightCount;L.push({x:W/2+Math.cos(a)*W*.3,y:H/2+Math.sin(a*1.3)*H*.3,R:R*.75})}ST.ls=L}
+const ints=(x,y)=>{let s=0;for(const l of ST.ls)s+=lv(1-Math.hypot(x-l.x,y-l.y)/l.R);return clamp(s)};
+function step(dt){if(!P.paused){Tp+=dt;if(P.autoMotion)T+=dt*P.lightSpeed}lightsAt();for(const m of ST.mass)m.I=ints(m.x,m.y);for(const p of ST.pts)p.I=ints(p.x,p.y)}
+
+/* ===== 레이어 렌더러 (부드러운 반투명 형태 + 빛) ===== */
+const col3=(c3,I)=>I<.35?mixc(c3[0],c3[1],I/.35):mixc(c3[1],c3[2],(I-.35)/.65);
+function blob(c,x,y,rx,ry,rot,col,a,soft,ctr,ring){if(a<.004)return;c.save();c.translate(x,y);c.rotate(rot);c.scale(1,ry/rx);const g=c.createRadialGradient(0,0,0,0,0,rx),h=1-soft;
+ if(ring){g.addColorStop(0,rgba(col,0));g.addColorStop(.5,rgba(col,a*.15));g.addColorStop(.72,rgba(col,a));g.addColorStop(1,rgba(col,0))}
+ else{g.addColorStop(0,rgba(ctr||col,a));g.addColorStop(clamp(h*.6,.02,.9),rgba(col,a*.8));g.addColorStop(1,rgba(col,0))}c.fillStyle=g;c.fillRect(-rx,-rx,rx*2,rx*2);c.restore()}
+function lg(x,l,amt,col){const g=x.createRadialGradient(l.x,l.y,0,l.x,l.y,l.R);for(let k=0;k<=8;k++)g.addColorStop(k/8,col?rgba(col,lv(1-k/8)*amt):`rgba(0,0,0,${lv(1-k/8)*amt})`);x.fillStyle=g;x.fillRect(l.x-l.R,l.y-l.R,l.R*2,l.R*2)}
+function lmask(x,l,f){const g=x.createRadialGradient(l.x,l.y,0,l.x,l.y,l.R);for(let k=0;k<=8;k++)g.addColorStop(k/8,`rgba(255,255,255,${f(lv(1-k/8))})`);x.fillStyle=g;x.fillRect(l.x-l.R,l.y-l.R,l.R*2,l.R*2)}
+// 생성 효과 혼합: 형태 복원이 높을수록 큰 덩어리·패턴·색 반응이 구조를 덮지 않도록 줄이고, 혼합이 높으면 다시 살린다
+const genF=()=>{const R=eff('restore'),sp=eff('shapePres'),gm=P.genMix;return{mf:1-R*(1-gm)*.8,pf:1-R*(1-gm)*.4,of:1-sp*R*.7}};
+const tmpC=(w,h)=>{const k=w+'x'+h;if(tmpC.k!=k){tmpC.c=cvs(w,h);tmpC.k=k}const t=tmpC.c,x=t.getContext('2d');x.setTransform(1,0,0,1,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;x.filter='none';x.clearRect(0,0,w,h);return t};
+const draw=[
+ // 0 원본 참고
+ G=>{const c=G.ctx,W=P.W,H=P.H;if(srcImg){const k=Math.min(W/srcImg.width,H/srcImg.height)*P.imageScale;c.translate(W/2,H/2);c.rotate(P.imageRotation*Math.PI/180);c.drawImage(srcImg,-srcImg.width*k/2,-srcImg.height*k/2,srcImg.width*k,srcImg.height*k)}else if(ST.srcCv)c.drawImage(ST.srcCv,0,0,W,H)},
+ // 1 구조 복원: 원본 픽셀이 아니라 현재 팔레트로 다시 칠한 형태·명암·내부 경계. 빛은 shadow→mid→lit 색 변형의 합성 비율로만 작용
+ G=>{const c=G.ctx,W=P.W,H=P.H,S=ST.SV,a=clamp(eff('restore')*1.3);if(!S||a<.01)return;const cw=c.canvas.width,ch=c.canvas.height,s=G.s;
+  c.imageSmoothingEnabled=true;c.imageSmoothingQuality='high';c.globalAlpha=a;c.drawImage(S[0],0,0,W,H);c.globalAlpha=1;
+  const part=(img,f)=>{const t=tmpC(cw,ch),x=t.getContext('2d');x.setTransform(s,0,0,s,0,0);x.imageSmoothingQuality='high';x.globalCompositeOperation='lighter';ST.ls.forEach(l=>lmask(x,l,f));
+   x.globalCompositeOperation='source-in';x.drawImage(img,0,0,W,H);c.save();c.setTransform(1,0,0,1,0,0);c.globalAlpha=a;c.drawImage(t,0,0);c.restore()};
+  part(S[1],v=>clamp(v/.35));part(S[2],v=>clamp((v-.35)/.65))},
+ // 2 외곽 형태: 부드러운 색 위치 지도 + 빛에 녹는 약한 경계
+ G=>{const c=G.ctx,W=P.W,H=P.H,s=G.s,F='filter'in c;if(ST.cf){c.globalAlpha=.9*(1-.7*eff('restore'));if(F)c.filter=`blur(${(3+P.abstraction*8)*s}px)`;c.drawImage(ST.cf,0,0,W,H);c.filter='none';c.globalAlpha=1}
+  if(P.edgeOn&&ST.ec){const t=tmpC(c.canvas.width,c.canvas.height),x=t.getContext('2d');x.setTransform(s,0,0,s,0,0);if(F)x.filter=`blur(${(.5+P.edgeSoft*5)*s}px)`;x.globalAlpha=clamp(P.edgeStrength*P.edgeOpacity*2.6)*(1-.6*eff('restore'));x.drawImage(ST.ec,0,0,W,H);x.filter='none';x.globalAlpha=1;
+   x.globalCompositeOperation='source-in';x.fillStyle=rgba(mixc(ok(.97,.03,PAL.bh),ok(.74,.09,PAL.bh),P.edgeTint),1);x.fillRect(0,0,W,H);x.globalCompositeOperation='destination-out';ST.ls.forEach(l=>lg(x,l,P.edgeDissolve));c.setTransform(1,0,0,1,0,0);c.drawImage(t,0,0)}},
+ // 2 큰 색 덩어리: 겹치면 섞이는 반투명 그라디언트, 빛을 받으면 밝고 맑게
+ G=>{const c=G.ctx,g=genF();for(const m of ST.mass){const col=col3(m.c3,m.I),k=1+P.diffusion*.4+m.I*.15,fa=g.mf*(m.ins+(1-m.ins)*g.of);blob(c,m.x,m.y,m.rx*k,m.ry*k,m.rot,col,P.overlap*(.45+.3*m.I)*fa,.35+P.softness*.6,mixc(col,[255,255,255],P.gradient*.4*(.5+m.I)))}},
+ // 3 패턴: 평소엔 희미하게, 빛이 닿으면 드러나는 부드러운 반점
+ G=>{const c=G.ctx,sf=.3+P.patSoft*.65,g=genF();for(const p of ST.pts){const rv=sstep(.2,.55,p.I*(.5+.9*p.res)),a=P.patOpacity*lerp(.22,1,rv)*(.5+.5*lerp(1,p.E,eff('patternPres')))*g.pf*(p.ins+(1-p.ins)*g.of),col=col3(p.c3,p.I);
+  if(p.ty==0||p.ty==2)blob(c,p.x,p.y,p.r,p.r,0,col,a*(p.ty?.9:.6),sf);else if(p.ty==1)blob(c,p.x,p.y,p.r,p.r*p.asp,p.rot,col,a*.55,sf);else if(p.ty==3)blob(c,p.x,p.y,p.r,p.r*p.asp,p.rot,col,a*.4,Math.min(1,sf+.3));else blob(c,p.x,p.y,p.r,p.r,0,col,a*.9,sf,null,true)}},
+ // 4 색 반응: 빛 받은 중심부 + 포인트 색
+ G=>{const c=G.ctx,g=genF();for(const m of ST.mass){const fa=g.mf*(m.ins+(1-m.ins)*g.of),rv=sstep(.2,.55,m.I*(.5+.9*m.res));if(m.sAcc<P.accentRatio*1.6)blob(c,m.x,m.y,m.rx*.8,m.ry*.8,m.rot,col3(PAL.acc3,m.I),(.28+.6*rv)*P.overlap*fa,.5+P.softness*.4);
+  if(m.I>.3)blob(c,m.x,m.y,m.rx*.7,m.ry*.7,m.rot,m.c3[2],.5*sstep(.3,.9,m.I)*P.sunShift*fa,.7)}},
+ // 5 빛: 그림자 베일(빛 닿는 곳만 맑게) + 발광 + 겹침 발광
+ G=>{const c=G.ctx,W=P.W,H=P.H,va=P.shadowShift*.38*(1-.55*eff('restore'));if(va>0){c.globalAlpha=va;c.fillStyle=rgba(PAL.veil,1);c.fillRect(0,0,W,H);c.globalAlpha=1;c.globalCompositeOperation='destination-out';ST.ls.forEach(l=>lg(c,l,1));c.globalCompositeOperation='source-over'}
+  ST.ls.forEach(l=>lg(c,l,.5*P.glow,ok(.99,.035,75)));
+  if(P.overlapGlow>0){c.globalCompositeOperation='lighter';for(const m of ST.mass)if(m.I>.12)blob(c,m.x,m.y,m.rx*.9,m.ry*.9,m.rot,m.c3[2],.16*P.overlapGlow*m.I,.7);c.globalCompositeOperation='source-over'}
+  if(G.prev)ST.ls.forEach(l=>{c.globalAlpha=.8;c.strokeStyle='#fff';c.lineWidth=2;c.beginPath();c.arc(l.x,l.y,9,0,TAU);c.stroke();c.globalAlpha=1})},
+ // 6 공기감: 안개 · 번짐 · 은은한 밝은 입자 (어두운 그레인 없음)
+ G=>{const c=G.ctx,W=P.W,H=P.H,s=G.s;if(P.haze>0){c.globalAlpha=P.haze*.3;c.fillStyle=rgba(PAL.hazeC,1);c.fillRect(0,0,W,H);c.globalAlpha=1;ST.ls.forEach(l=>lg(c,l,P.haze*.5,PAL.hazeC))}
+  if(P.air>0){const g=c.createLinearGradient(0,0,0,H);g.addColorStop(0,`rgba(255,255,255,${P.air*.35})`);g.addColorStop(1,'rgba(255,255,255,0)');c.fillStyle=g;c.fillRect(0,0,W,H)}
+  if(P.bloom>0&&'filter'in c&&G.bloom){c.filter=`blur(${14*s}px)`;c.globalCompositeOperation='lighter';c.globalAlpha=P.bloom*.55;c.drawImage(G.bloom(),0,0,W,H);c.filter='none';c.globalCompositeOperation='source-over';c.globalAlpha=1}
+  if(P.grain>0){const r=RNG(P.seed+77),pc=ok(.99,.04,PAL.bh);for(let i=0;i<160;i++){const x=r()*W,y=r()*H,tw=.5+.5*Math.sin(Tp*1.5+r()*20),rr=(1+r()*3)*Math.min(W,H)/1000;blob(c,x,y,rr*2,rr*2,0,pc,P.grain*.9*tw,.8)}}},
+ G=>apDrawImg(G),G=>apDrawDif(G),G=>apDrawGeo(G),G=>apDrawAnn(G)];
+function renderOne(i,cv,s,prev,bf){const c=cv.getContext('2d');c.setTransform(1,0,0,1,0,0);c.globalCompositeOperation='source-over';c.globalAlpha=1;c.clearRect(0,0,cv.width,cv.height);c.setTransform(s,0,0,s,0,0);c.lineCap=c.lineJoin='round';draw[i]({ctx:c,s,prev,bloom:bf})}
+
+
+/* ===== ApertureEngine =====
+   빛 → 조리개(개구부 마스크 · 통과량) → 제어된 이미지(Field A) → 예술적 확산광(Field B) → 상태 겹침.
+   조리개 자체가 번지게 하는 것이 아니라, 통과한 색과 빛에서 확산 필드를 따로 만든다. */
+const ABOP=['source-over','screen','lighten'],SQ=720;
+// 홍채 조리개: 날개 i의 안쪽 가장자리를 반지름 Rb의 원호로 보고, 개구부 = 모든 원의 교집합. 원 중심 거리 d = Rb − r 이므로 개방도·날개 위치·회전이 한 식으로 묶인다.
+function apIris(open,rotDeg,n,U,cx,cy,jit){const r=U*.94*(.04+.96*open),Rb=U*1.9,d0=Rb-r,sw=(1-open)*.5*TAU/n,rot=rotDeg*Math.PI/180,bl=[];   // 닫힐수록 날개가 더 돌아 들어간다
+ for(let i=0;i<n;i++){const ph=rot+i*TAU/n+sw+jit[i][0]*.02*P.apIrreg,di=d0*(1+jit[i][1]*.02*P.apIrreg),c=Math.cos(ph),s=Math.sin(ph);bl.push({ph,d:di,c,s,x:cx+di*c,y:cy+di*s})}
+ const poly=new Float32Array(SQ*2);
+ for(let j=0;j<SQ;j++){const th=j/SQ*TAU,ux=Math.cos(th),uy=Math.sin(th);let best=1e9;
+  for(let i=0;i<n;i++){const b=bl[i],bb=(ux*b.c+uy*b.s)*b.d,rho=bb+Math.sqrt(Math.max(0,bb*bb+Rb*Rb-b.d*b.d));if(rho<best)best=rho}
+  poly[j*2]=cx+best*ux;poly[j*2+1]=cy+best*uy}
+ return{r,Rb,Ro:U*1.22,cx,cy,bl,poly}}
+// 결정적(deterministic) 상태 계산: 같은 시드·같은 값이면 항상 같은 상태
+function apStates(){const W=P.W,H=P.H,single=P.apMode==AM[0],seq=P.apMode==AM[2],n=single?1:Math.max(2,P.apN|0),opn=P.apDir==AD[0],gam=Math.pow(2,(P.apSpacing-.5)*2),nbl=Math.max(3,P.apBlades|0),
+ U=P.apScale*Math.min(W,H)/2,cx=P.apX*W,cy=P.apY*H,jr=RNG(P.seed*31+17),jit=[],cols=n<=3?n:Math.ceil(n/2),rows=Math.ceil(n/cols),sts=[];for(let i=0;i<nbl;i++)jit.push([gauss(jr),gauss(jr)]);
+ for(let k=0;k<n;k++){const t=n>1?k/(n-1):1,p0=Math.pow(t,gam),p=opn?p0:1-p0,o=(single?P.apOpening:lerp(P.apStart,P.apEnd,p))/100,rot=P.apRot+(single?0:P.apRot0+P.apRotTotal*p),
+  tau=.28+.72*Math.pow(clamp(o),.75),g=1+(tau-.72)*P.apTrans*2*(1-P.apExpo*.9),   // 통과량: 열림 면적에 가까운 완만한 곡선 + 노출 보정
+  op=single||seq?1:clamp(lerp(P.apPrevOp,P.apCurOp,t)*(k<n-1?lerp(.3,1.25,P.apTrail):1)),st={k,n,t,p,open:o,rot,tau,g,op,...apIris(clamp(o),rot,nbl,U,cx,cy,jit)};
+  if(seq){const col=k%cols,row=k/cols|0,cw=W/cols,ch=H/rows,kk=Math.min(cw/W,ch/H)*.88;st.T={k:kk,ox:col*cw+(cw-W*kk)/2,oy:row*ch+(ch-H*kk)/2,cw,ch,cx0:col*cw,cy0:row*ch}}
+  sts.push(st)}return sts}
+const apPath=(x,p)=>{x.beginPath();x.moveTo(p[0],p[1]);for(let j=1;j<SQ;j++)x.lineTo(p[j*2],p[j*2+1]);x.closePath()};
+function apMaskFill(x,st,soft,s){x.fillStyle='#fff';
+ if(soft*s>.6){const BIG=40000;x.save();x.shadowColor='#fff';x.shadowBlur=soft*s;x.shadowOffsetX=BIG*s;x.translate(-BIG,0);apPath(x,st.poly);x.fill();x.restore()}else{apPath(x,st.poly);x.fill()}}   // 도형 자체는 화면 밖, 그림자만 경계에 남겨 경계만 살짝 부드럽게
+function apScene(s,w,h){const t=cvs(w,h),x=t.getContext('2d'),u=cvs(w,h);for(let i=1;i<=5;i++){if(!LY[i].visible)continue;renderOne(i,u,s,false);x.globalAlpha=LY[i].opacity;x.drawImage(u,0,0)}x.globalAlpha=1;return t}
+// 확산 필드: 통과한 색(제어 이미지)을 저해상도 격자로 줄인 뒤 번지게 해서 개구부 밖으로 퍼뜨린다. 기하 구조에는 영향 없음.
+function apDif(S,w,h){const gw=96,gh=Math.max(8,Math.round(gw*h/w));let cv=S,cw=w,ch=h;
+ while(cw>gw*2){const nw=Math.max(gw,cw>>1),nh=Math.max(gh,ch>>1),t=cvs(nw,nh);t.getContext('2d').drawImage(cv,0,0,nw,nh);cv=t;cw=nw;ch=nh}
+ const sm=cvs(gw,gh),sg=sm.getContext('2d');sg.drawImage(cv,0,0,gw,gh);const d=sg.getImageData(0,0,gw,gh).data,N=gw*gh;let B=[0,1,2,3].map(()=>new Float32Array(N));
+ for(let i=0;i<N;i++){const a=d[i*4+3]/255;B[0][i]=d[i*4]/255*a;B[1][i]=d[i*4+1]/255*a;B[2][i]=d[i*4+2]/255*a;B[3][i]=a}
+ const rg=Math.max(1,Math.round(P.apDifRadius*gw*.45)),ps=1+Math.round(P.apDifSoft*2);for(let q=0;q<ps;q++)B=B.map(a=>boxb(a,gw,gh,rg));
+ const o=sg.createImageData(gw,gh);for(let i=0;i<N;i++){const a=B[3][i];if(a<.003)continue;const q=i*4;const r0=B[0][i]/a*255,g0=B[1][i]/a*255,b0=B[2][i]/a*255,mm=(r0+g0+b0)/3,bs=1.55;o.data[q]=Math.max(0,Math.min(255,mm+(r0-mm)*bs+10));o.data[q+1]=Math.max(0,Math.min(255,mm+(g0-mm)*bs+10));o.data[q+2]=Math.max(0,Math.min(255,mm+(b0-mm)*bs+10));o.data[q+3]=Math.pow(clamp(a*1.5),1.15)*255}
+ const out=cvs(gw,gh);out.getContext('2d').putImageData(o,0,0);return out}
+// 장면(구조·덩어리·패턴·색 반응)은 조리개 값과 무관하므로 따로 캐시: 개방도·회전 슬라이더를 움직여도 원본 구조를 다시 그리지 않는다
+let apSc=null;
+const apSceneKey=s=>s+'|'+JSON.stringify(P,(k,v)=>k.startsWith('ap')?undefined:v)+'|'+srcId+(srcImg?1:0)+'|'+apReb+'|'+[1,2,3,4,5].map(i=>LY[i].visible+':'+LY[i].opacity).join()+'|'+ST.ls.map(l=>(l.x|0)+','+(l.y|0)+','+(l.R|0)).join(';');
+function apSceneC(s,w,h){if(s!=PS)return apScene(s,w,h);const k=apSceneKey(s);if(apSc&&apSc.key==k)return apSc.cv;const cv=apScene(s,w,h);apSc={key:k,cv};return cv}
+function apBuild(s,key){const W=P.W,H=P.H,w=Math.round(W*s),h=Math.round(H*s),sts=apStates(),sc=apSceneC(s,w,h),img=cvs(w,h),ix=img.getContext('2d'),M=cvs(w,h),mx=M.getContext('2d'),S=cvs(w,h),sx=S.getContext('2d'),
+ soft=(1-P.apSharp)*.06*Math.min(W,H),leak=clamp(1-P.apMask),seq=P.apMode==AM[2],bo=seq?'source-over':ABOP[Math.max(0,AB.indexOf(P.apBlend))],ord=seq?sts:sts.slice().sort((a,b)=>b.open-a.open);   // 큰 개구부를 아래, 작은 개구부를 위로
+ for(const st of ord){
+  mx.setTransform(1,0,0,1,0,0);mx.globalCompositeOperation='source-over';mx.globalAlpha=1;mx.clearRect(0,0,w,h);mx.setTransform(s,0,0,s,0,0);
+  if(leak>.002){mx.globalAlpha=leak;mx.fillStyle='#fff';mx.fillRect(0,0,W,H);mx.globalAlpha=1}
+  apMaskFill(mx,st,soft,s);
+  sx.setTransform(1,0,0,1,0,0);sx.globalCompositeOperation='source-over';sx.globalAlpha=1;sx.clearRect(0,0,w,h);sx.drawImage(sc,0,0);sx.globalCompositeOperation='destination-in';sx.drawImage(M,0,0);
+  sx.globalCompositeOperation='source-atop';   // 빛 통과량: 적게 통과하면 라벤더 베일, 많이 통과하면 안개빛 하이라이트 (검정·순백으로 가지 않음)
+  if(st.g<1){sx.globalAlpha=(1-st.g)*.9;sx.fillStyle=rgba(PAL.veil,1);sx.fillRect(0,0,w,h)}else if(st.g>1){sx.globalAlpha=clamp((st.g-1)*1.2,0,.5);sx.fillStyle=rgba(PAL.hazeC,1);sx.fillRect(0,0,w,h)}
+  if(P.apTint>0){sx.globalAlpha=P.apTint*.35;sx.fillStyle=rgba(mixc(ok(.88,.07,290),ok(.975,.08,75),st.t),1);sx.fillRect(0,0,w,h)}   // 시간 순서에 따른 차가움→따뜻함 (기존 그림자/햇빛 색 축)
+  sx.globalAlpha=1;sx.globalCompositeOperation='source-over';
+  st.dif=apDif(S,w,h);
+  ix.globalAlpha=st.op;ix.globalCompositeOperation=bo;if(st.T)ix.drawImage(S,st.T.ox*s,st.T.oy*s,W*st.T.k*s,H*st.T.k*s);else ix.drawImage(S,0,0)}
+ ix.globalAlpha=1;ix.globalCompositeOperation='source-over';return{key,img,sts}}
+let apC=null,apE=null,apReb=0,apHold=false;
+const apSig=s=>s+'|'+JSON.stringify(P)+'|'+srcId+(srcImg?1:0)+'|'+apReb+'|'+[1,2,3,4,5].map(i=>LY[i].visible+':'+LY[i].opacity).join()+'|'+ST.ls.map(l=>(l.x|0)+','+(l.y|0)+','+(l.R|0)).join(';');
+function apGet(s){const key=apSig(s);if(s==PS){if(!apC||apC.key!=key)apC=apBuild(s,key);return apC}if(!apE||apE.key!=key)apE=apBuild(s,key);return apE}
+function apDrawImg(G){if(!P.apEnabled)return;G.ctx.drawImage(apGet(G.s).img,0,0,P.W,P.H)}
+function apDrawDif(G){if(!P.apEnabled)return;const c=G.ctx,W=P.W,H=P.H,s=G.s,o=apGet(s),seq=P.apMode==AM[2],cw=c.canvas.width,ch=c.canvas.height,bo=seq?'source-over':ABOP[Math.max(0,AB.indexOf(P.apBlend))],
+ ord=seq?o.sts:o.sts.slice().sort((a,b)=>b.open-a.open),fa=P.flowAngle*Math.PI/180;
+ for(const st of ord){const t=tmpC(cw,ch),x=t.getContext('2d');x.save();x.setTransform(s,0,0,s,0,0);x.imageSmoothingEnabled=true;x.imageSmoothingQuality='high';
+  if(st.T){x.beginPath();x.rect(st.T.cx0,st.T.cy0,st.T.cw,st.T.ch);x.clip();x.translate(st.T.ox,st.T.oy);x.scale(st.T.k,st.T.k)}
+  const dd=P.apDifDrift*.07*Math.min(W,H)*st.t;x.drawImage(st.dif,Math.cos(fa)*dd,Math.sin(fa)*dd,W,H);   // 상태가 뒤로 갈수록 흐름 방향으로 조금씩 흘러감
+  x.globalCompositeOperation='destination-out';x.globalAlpha=.6;apPath(x,st.poly);x.fill();x.restore();   // 개구부 안쪽은 제어 이미지가 담당 → 밝기 이중 가산 방지
+  const a=clamp(P.apDifInt*clamp(st.g,.5,1.2)*(.4+.6*st.op),0,1.5),ov=seq?0:P.apDifOverlap;
+  c.save();c.setTransform(1,0,0,1,0,0);c.globalCompositeOperation=bo;c.globalAlpha=clamp(a*(1-.35*ov));c.drawImage(t,0,0);
+  if(ov>.05){c.globalCompositeOperation='lighten';c.globalAlpha=clamp(a*ov*.6);c.drawImage(t,0,0)}c.restore()}}
+function apDrawGeo(G){if(!P.apEnabled||!P.apGeoVis)return;const c=G.ctx,W=P.W,H=P.H,u=Math.min(W,H)/1000,lw=P.apLineW*u,sts=apStates(),N=sts.length,seq=P.apMode==AM[2],lc=ok(.64,.06,PAL.bh+15),lc2=ok(.56,.09,PAL.bh-20);
+ c.save();c.lineJoin=c.lineCap='round';
+ sts.forEach((st,k)=>{const last=k==N-1,ga=P.apGeoOpacity*(seq||last?1:lerp(.38,.8,k/(N-1))*lerp(.45,1,P.apTrail));c.save();
+  if(st.T){c.beginPath();c.rect(st.T.cx0,st.T.cy0,st.T.cw,st.T.ch);c.clip();c.translate(st.T.ox,st.T.oy);c.scale(st.T.k,st.T.k)}
+  if(P.apBladeFill>0){c.save();c.beginPath();c.arc(st.cx,st.cy,st.Ro,0,TAU);c.clip();c.fillStyle=rgba(lc,1);c.globalAlpha=P.apBladeFill*ga;   // 날개가 겹칠수록 조금씩 진해지는 투명 면
+   for(const b of st.bl){c.beginPath();c.rect(st.cx-st.Ro-2,st.cy-st.Ro-2,st.Ro*2+4,st.Ro*2+4);c.moveTo(b.x+st.Rb,b.y);c.arc(b.x,b.y,st.Rb,0,TAU);c.fill('evenodd')}c.restore()}
+  if(P.apBladeLine>0){c.strokeStyle=rgba(lc,1);c.lineWidth=lw*.8;c.globalAlpha=P.apBladeLine*ga;   // 날개 가장자리 원호가 하우징 링까지 이어지는 선 (실제 마스크 계산에 쓰인 원)
+   for(const b of st.bl){c.beginPath();let pen=false;for(let j=0;j<=400;j++){const a=j/400*TAU,x=b.x+st.Rb*Math.cos(a),y=b.y+st.Rb*Math.sin(a);if(Math.hypot(x-st.cx,y-st.cy)<=st.Ro){if(pen)c.lineTo(x,y);else{c.moveTo(x,y);pen=true}}else pen=false}c.stroke()}}
+  if(last?P.apContour:P.apPrevContour){c.strokeStyle=rgba(lc2,1);c.lineWidth=lw*(last?1.5:1.1);c.globalAlpha=ga;apPath(c,st.poly);c.stroke()}
+  if(P.apGuides&&(last||seq)){c.strokeStyle=rgba(lc,1);c.lineWidth=lw*.6;c.globalAlpha=.55*P.apGeoOpacity;c.setLineDash([8*u,10*u]);
+   c.beginPath();c.arc(st.cx,st.cy,st.Ro,0,TAU);c.stroke();c.beginPath();c.arc(st.cx,st.cy,st.r,0,TAU);c.stroke();
+   for(const b of st.bl){c.beginPath();c.moveTo(st.cx,st.cy);c.lineTo(st.cx+b.c*st.Ro,st.cy+b.s*st.Ro);c.stroke()}c.setLineDash([]);
+   c.beginPath();c.moveTo(st.cx-8*u,st.cy);c.lineTo(st.cx+8*u,st.cy);c.moveTo(st.cx,st.cy-8*u);c.lineTo(st.cx,st.cy+8*u);c.stroke()}
+  c.restore()});c.restore()}
+function apDrawAnn(G){if(!P.apEnabled||!P.apAnn)return;const c=G.ctx,W=P.W,H=P.H,u=Math.min(W,H)/1000,fs=11*P.apAnnSize*u,lh=fs*1.5,sts=apStates(),N=sts.length,seq=P.apMode==AM[2],m=W*.045,col=ok(.5,.05,PAL.bh+10);
+ c.save();c.fillStyle=rgba(col,1);c.strokeStyle=rgba(col,1);c.globalAlpha=P.apAnnOp;c.font=`500 ${fs}px "Helvetica Neue",Arial,"Apple SD Gothic Neo",sans-serif`;c.textBaseline='top';if('letterSpacing'in c)c.letterSpacing=(fs*.1)+'px';
+ c.fillText('DIFFUSE CONTROL',m,m);c.fillText('IRIS STUDY 01',m,m+lh);c.textAlign='right';
+ const rl=['BLADES '+(P.apBlades|0)];if(P.apAnnCoord)rl.push('CENTER '+P.apX.toFixed(2)+' / '+P.apY.toFixed(2));rl.push('SEED '+P.seed);rl.forEach((t,i)=>c.fillText(t,W-m,m+i*lh));c.textAlign='left';
+ sts.forEach((st,k)=>{const L=[];if(P.apAnnNum)L.push('STATE '+String(st.k+1).padStart(2,'0'));if(P.apAnnOpen){L.push('OPENING '+Math.round(st.open*100)+'%');L.push('TRANSMISSION \u00d7'+st.g.toFixed(2))}if(P.apAnnRot)L.push('ROTATION '+Math.round(st.rot)+'\u00b0');if(!L.length)return;
+  let x,y;if(seq){x=st.T.ox;y=st.T.oy+H*st.T.k+fs*.8}else{x=m+k*(W-2*m)/N;y=H-m-L.length*lh}
+  L.forEach((t,i)=>c.fillText(t,x,y+i*lh));
+  if(P.apAnnLeader&&!seq){const ax=x,ay=y-fs*.6,j=(((Math.atan2(ay-st.cy,ax-st.cx)/TAU)%1+1)%1*SQ)|0,px=st.poly[j*2],py=st.poly[j*2+1];
+   if(Math.hypot(ax-st.cx,ay-st.cy)>Math.hypot(px-st.cx,py-st.cy)){c.lineWidth=u*.8;c.globalAlpha=P.apAnnOp*.6;c.beginPath();c.moveTo(px,py);c.lineTo(ax,ay);c.stroke();c.beginPath();c.arc(px,py,fs*.25,0,TAU);c.fill();c.globalAlpha=P.apAnnOp}}});
+ c.restore()}
+
+/* ===== LayerManager / 메인 루프 ===== */
+const LY=NAMES.map((n,i)=>({name:n,cv:cvs(8,8),visible:i!=0,opacity:1})),main=$('#cv'),mc=main.getContext('2d');
+// 조리개 ON: 구조·덩어리·패턴·색 반응(1~5)은 조리개 제어 이미지의 입력이 되고, 합성에는 직접 들어가지 않는다 (이중 합성 방지)
+const order=()=>P.apEnabled?[0,9,8,6,7,10,11]:[0,1,2,3,4,5,6,7];
+function setSize(){PS=Math.min(1,1000/Math.max(P.W,P.H));main.width=Math.round(P.W*PS);main.height=Math.round(P.H*PS);LY.forEach(l=>{l.cv.width=main.width;l.cv.height=main.height});pend=3}
+const bloomF=(s,pv)=>()=>{if(P.apEnabled){const o=apGet(pv?PS:s),t=cvs(o.img.width,o.img.height);t.getContext('2d').drawImage(o.img,0,0);return t}   // 조리개 모드: 번짐은 통과한 빛에서 생긴다
+ if(pv){const t=cvs(main.width,main.height);t.getContext('2d').drawImage(LY[3].cv,0,0);t.getContext('2d').drawImage(LY[5].cv,0,0);return t}
+ const t=cvs(P.W*s,P.H*s),u=cvs(P.W*s,P.H*s);renderOne(3,t,s,false);renderOne(5,u,s,false);t.getContext('2d').drawImage(u,0,0);return t};
+function frame(now){requestAnimationFrame(frame);const dt=Math.min(.05,(now-(frame.l||now))/1000);frame.l=now;if(pend)rebuild();if(P.paused&&!dirty)return;dirty=0;step(P.paused?0:dt);
+ const od=order();for(const i of od)if(LY[i].visible)renderOne(i,LY[i].cv,PS,true,bloomF(1,true));
+ mc.clearRect(0,0,main.width,main.height);if(!P.transparent){mc.fillStyle=rgba(PAL.bg,1);mc.fillRect(0,0,main.width,main.height)}
+ for(const i of od){const L=LY[i];if(L.visible){mc.globalAlpha=L.opacity;mc.drawImage(L.cv,0,0)}}mc.globalAlpha=1;main.classList.toggle('tr',P.transparent)}
+
+/* ===== Exporter ===== */
+const dl=(cv,name)=>new Promise(res=>cv.toBlob(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000);res()},'image/png'));
+const fname=t=>`light_${P.seed}_${t}_${P.exportScale}x.png`;
+async function exLayer(i){try{const s=P.exportScale,c=cvs(P.W*s,P.H*s);renderOne(i,c,s,false,bloomF(s));await dl(c,fname((i+1)+'_'+NAMES[i].replace(/\s/g,'')))}catch(e){msg('저장 실패 (해상도를 낮춰보세요): '+e.message)}finally{if(!apHold)apE=null}}
+async function exComp(tr){try{const s=P.exportScale,o=cvs(P.W*s,P.H*s),c=o.getContext('2d'),t=cvs(o.width,o.height);if(!tr){c.fillStyle=rgba(PAL.bg,1);c.fillRect(0,0,o.width,o.height)}
+ for(const i of order()){if(!LY[i].visible)continue;renderOne(i,t,s,false,bloomF(s));c.globalAlpha=LY[i].opacity;c.drawImage(t,0,0)}await dl(o,fname(tr?'전체합성_투명':'전체합성'))}catch(e){msg('저장 실패 (해상도를 낮춰보세요): '+e.message)}finally{apE=null}}
+async function exAll(){apHold=true;try{for(const i of order())if(LY[i].visible)await exLayer(i)}finally{apHold=false;apE=null}}
+
+/* ===== Randomizer: 아트디렉터식 큐레이션 범위 ===== */
+const rnd=(a,b,r)=>a+(b-a)*r(),pick=(a,r)=>a[r()*a.length|0];
+const RZ={
+ palette(r){P.palMode=pick(PM,r);P.baseHue=rnd(0,360,r);P.hueSpread=rnd(20,70,r);P.bright=rnd(.86,.93,r);P.chroma=rnd(.06,.11,r);P.contrast=rnd(.3,1,r);P.accentRatio=rnd(.03,.14,r);P.accentHue=rnd(-25,25,r);P.overlap=rnd(.5,.9,r);P.gradient=rnd(.3,.8,r);P.sunShift=rnd(.4,.9,r);P.shadowShift=rnd(.3,.7,r)},
+ comp(r){P.compMode=pick(CM,r);P.flowAngle=rnd(-60,60,r);P.flowStrength=rnd(.45,.9,r);P.curvature=rnd(.2,.9,r);P.massCount=Math.round(rnd(80,160,r)/5)*5;P.massSize=rnd(55,100,r);P.hier=rnd(.3,.8,r);P.asym=rnd(.2,.7,r);P.centerX=rnd(.42,.58,r);P.centerY=rnd(.42,.58,r);P.rot=rnd(-25,25,r);P.gscale=rnd(.85,1.15,r)},
+ light(r){P.lightMode=pick(LM.slice(1),r);P.lightCount=r()<.75?1:2;P.lightRadius=rnd(.3,.5,r);P.lightIntensity=rnd(.9,1.2,r);P.lightFalloff=rnd(.8,1.8,r);P.lightSoft=rnd(.5,1,r);P.glow=rnd(.3,.6,r);P.lightSpeed=rnd(.3,1,r)},
+ src(r){P.shapePres=rnd(.55,.9,r);P.patternPres=rnd(.35,.8,r);P.posPres=rnd(.35,.9,r);P.origColor=rnd(.1,.6,r);P.abstraction=rnd(.2,.55,r);P.remap=rnd(.5,.9,r);const q=[r(),r(),r(),r()];
+  if(!P.structLock)['restore','detailKeep','edgeKeep','lumStruct'].forEach((k,i)=>{P[k]=clamp(P[k]+lerp(-.06,.1,q[i]))})},   // 잠금 해제 시에도 거의 낮추지 않음
+ pat(r){P.patType=pick(PT,r);P.patSize=rnd(.7,1.5,r);P.patDensity=rnd(.3,.7,r);P.patSoft=rnd(.5,.9,r);P.patSpread=rnd(.3,.8,r);P.patOpacity=rnd(.5,.85,r)},
+ atm(r){P.bloom=rnd(.2,.5,r);P.diffusion=rnd(.2,.6,r);P.softness=rnd(.3,.7,r);P.haze=rnd(.1,.3,r);P.overlapGlow=rnd(.2,.6,r);P.grain=rnd(.15,.4,r);P.air=rnd(.2,.5,r);P.edgeStrength=rnd(.15,.4,r);P.edgeSoft=rnd(.5,.9,r);P.edgeDissolve=rnd(.5,.9,r);P.edgeOpacity=rnd(.25,.5,r)}};
+// 조리개 값은 '조리개 설정 유지'가 꺼져 있거나 사용자가 명시적으로 누를 때만 바뀐다
+const RZap=r=>{P.apBlades=pick([5,7,9],r);P.apStart=Math.round(rnd(12,35,r));P.apEnd=Math.round(rnd(65,92,r));P.apRotTotal=Math.round(rnd(12,48,r));P.apRot0=Math.round(rnd(-25,25,r));P.apRot=Math.round(rnd(-20,20,r));P.apX=rnd(.38,.62,r);P.apY=rnd(.38,.62,r);P.apScale=rnd(.8,1.4,r);P.apDir=r()<.75?AD[0]:AD[1]};
+const refresh=()=>{gui.controllersRecursive().forEach(c=>c.updateDisplay());$('#seed').value=P.seed;dirty=1};
+const part=(k,b)=>{RZ[k](RNG(Math.random()*4e9));pend|=b;refresh()};
+function applySeed(v){P.seed=(parseInt(v)||1)>>>0;const r=RNG(P.seed^0x5bd1e995);Object.values(RZ).forEach(f=>f(r));if(!P.apKeep)RZap(r);pend=3;refresh()}
+const genNew=()=>applySeed(1+Math.random()*999998|0);
+const PRESET={'균형형 재구성':[.6,.55,.6,.35],'형태 중심':[.9,.3,.35,.25],'패턴 중심':[.45,.9,.4,.3],'색 위치 중심':[.5,.4,.9,.35],'추상화 강함':[.35,.4,.45,.85]};
+function applyRec(){const r=RNG(P.seed+5),v=PRESET[P.recMode]||[rnd(.55,.9,r),rnd(.3,.9,r),rnd(.3,.9,r),rnd(.2,.7,r)];[P.shapePres,P.patternPres,P.posPres,P.abstraction]=v;refresh()}
+function applyIris(){Object.keys(DEF).filter(k=>k.startsWith('ap')).forEach(k=>P[k]=DEF[k]);LY[0].visible=false;[8,9,10,11].forEach(i=>LY[i].visible=true);refresh()}   // DIFFUSE CONTROL — IRIS STUDY 01
+function resetAll(){Object.assign(P,DEF);P.seed=20260;pend=3;refresh()}
+
+/* ===== GUI (모든 라벨 한글) ===== */
+const gui=new lil.GUI({autoPlace:false,width:330});$('#gui').appendChild(gui.domElement);const FO={},fo=n=>FO[n]||(FO[n]=gui.addFolder(n));
+S.forEach(([f,k,d,sp,lb])=>{const c=Array.isArray(sp)?(typeof sp[0]=='string'?fo(f).add(P,k,sp):fo(f).add(P,k,...sp)):sp===1?fo(f).add(P,k,0,1,.01):fo(f).add(P,k);
+ c.name(lb).onChange(()=>{if(k=='recMode')applyRec();pend|=AN.has(k)||k=='recMode'?3:NOREB.has(f)?0:2;dirty=1})});
+const act=(f,l,fn)=>fo(f).add({fn},'fn').name(l);
+act('원본','원본 이미지 불러오기',()=>$('#file').click());act('원본','원본 위치 맞춤',()=>{P.imageScale=.9;P.imageRotation=0;pend|=3;refresh()});act('원본','원본 지우기',()=>{srcImg=null;srcId++;pend|=3});
+act('조리개','IRIS STUDY 01 프리셋 적용',applyIris);act('조리개','조리개 값 무작위 (명시적)',()=>{RZap(RNG(Math.random()*4e9));refresh()});
+fo('원본').add(LY[0],'visible').name('원본 보기').listen().onChange(()=>dirty=1);
+const LF=gui.addFolder('레이어');LY.forEach((L,i)=>{const f=LF.addFolder(`${NAMES[i]}`);f.close();f.add(L,'visible').name('레이어 보이기').listen().onChange(()=>dirty=1);f.add(L,'opacity',0,1,.01).name('불투명도').onChange(()=>dirty=1);f.add({e:()=>exLayer(i)},'e').name('PNG 저장')});
+const EF=gui.addFolder('저장'),PRESETS={'1080 × 1080':[1080,1080],'1080 × 1350':[1080,1350],'1080 × 1920':[1080,1920],'1920 × 1080':[1920,1080]};
+EF.add({p:'1080 × 1080'},'p',Object.keys(PRESETS)).name('캔버스 크기').onChange(v=>{[P.W,P.H]=PRESETS[v];setSize()});EF.add(P,'exportScale',[1,2,3,4]).name('해상도 (배)');
+EF.add(P,'transparent').name('투명 배경 보기').listen().onChange(()=>dirty=1);EF.add({f:()=>exComp(false)},'f').name('전체 PNG 저장');EF.add({f:()=>exComp(true)},'f').name('투명 배경 PNG 저장');EF.add({f:exAll},'f').name('보이는 레이어 모두 저장');
+Object.values(FO).forEach(f=>f.close());FO['원본'].open();FO['조리개'].open();FO['움직임 기록'].open();
+
+/* ===== 인터랙션 ===== */
+const pos=e=>{const b=main.getBoundingClientRect();return{x:(e.clientX-b.left)/b.width*P.W,y:(e.clientY-b.top)/b.height*P.H,R:P.lightRadius*Math.min(P.W,P.H)}};let drag=false;
+let apDn=false;const apPt=p=>{if(!(P.apEnabled&&(P.apDrag==AT[1]||P.apLockLight)))return false;if(P.apDrag==AT[1]){P.apX=clamp(p.x/P.W,-.2,1.2);P.apY=clamp(p.y/P.H,-.2,1.2)}else{P.lightX=clamp(p.x/P.W);P.lightY=clamp(p.y/P.H)}refresh();return true};
+main.addEventListener('pointermove',e=>{const p=pos(e);if(apDn){apPt(p);return}if(drag&&ST.pin)ST.pin=p;ST.mouse=p;dirty=1});main.addEventListener('pointerleave',()=>{ST.mouse=null;dirty=1});
+main.addEventListener('pointerdown',e=>{const p=pos(e);if(apPt(p)){apDn=true;return}if(ST.pin&&Math.hypot(p.x-ST.pin.x,p.y-ST.pin.y)<p.R*.5)drag=true;else ST.pin=p;dirty=1});addEventListener('pointerup',()=>{drag=false;apDn=false});main.addEventListener('dblclick',()=>{ST.pin=null;dirty=1});
+const loadImage=f=>{if(!f)return;const im=new Image();im.onload=()=>{srcImg=im;srcId++;pend|=3;msg('')};im.onerror=()=>msg('이미지를 읽을 수 없어요.');im.src=URL.createObjectURL(f)};
+$('#file').onchange=e=>loadImage(e.target.files[0]);addEventListener('dragover',e=>e.preventDefault());addEventListener('drop',e=>{e.preventDefault();loadImage(e.dataTransfer.files[0])});
+$('#gen').onclick=genNew;$('#seed').onchange=e=>applySeed(e.target.value);$('#up').onclick=()=>$('#file').click();$('#b-reset').onclick=resetAll;
+$('#b-pal').onclick=()=>part('palette',2);$('#b-comp').onclick=()=>part('comp',2);$('#b-light').onclick=()=>part('light',0);$('#b-src').onclick=()=>part('src',3);$('#b-pat').onclick=()=>part('pat',2);
+const pz=()=>{P.paused=!P.paused;$('#pz').textContent=P.paused?'다시 재생':'일시정지';dirty=1};$('#pz').onclick=pz;
+addEventListener('keydown',e=>{if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName))return;const k=e.key.toLowerCase();if(k=='r')genNew();else if(k=='s')exComp(P.transparent);else if(k=='p')pz();else if(k=='h')$('#gui').style.display=$('#gui').style.display=='none'?'':'none';else if(k=='t'){P.transparent=!P.transparent;refresh()}});
+$('#seed').value=P.seed;setSize();requestAnimationFrame(frame);
+</script></body></html>
